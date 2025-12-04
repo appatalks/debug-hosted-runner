@@ -60,6 +60,8 @@ cat test-assets/id_rsa_test
 
 ### 4. Run the GitHub Actions Workflow
 
+Drop `debug-runner.yml` into `.github/workflows/`. (Optionally add your custom steps into the placeholder section) 
+
 1. Go to your repository → **Actions** → **SSH into GitHub Runner**
 2. Click **Run workflow**
 3. Provide these inputs:
