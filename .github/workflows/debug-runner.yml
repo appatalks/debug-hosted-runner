@@ -1,0 +1,124 @@
+name: SSH into GitHub Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      SSH_PUBLIC_KEY:
+        description: 'Your public key for runner access'
+        required: true
+      MAX_LIFETIME:
+        description: 'Max session lifetime in seconds'
+        required: false
+        default: '3600'
+
+jobs:
+  ssh-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install requirements
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+
+      - name: Configure SSHD on runner
+        run: |
+          sudo systemctl enable ssh
+          if [ -z "$(find /etc/ssh/ -name 'ssh_host_*' | xargs echo -n)" ]; then
+            DEBIAN_FRONTEND=noninteractive sudo dpkg-reconfigure openssh-server
+          fi
+          echo "PasswordAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+          echo "ChallengeResponseAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+      - name: Install authorized key (your SSH key)
+        env:
+          SSH_PUBLIC_KEY: ${{ github.event.inputs.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PUBLIC_KEY" > ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/authorized_keys
+
+      # PLACEHOLDER: Add your custom workflow steps here
+      # These steps run BEFORE the tunnel is established
+      # Example: checkout code, run tests, build artifacts, etc.
+      - name: Example - Hello World
+        run: |
+          echo "Hello from GitHub Actions runner!"
+          echo "Runner: $(hostname)"
+          echo "User: $(whoami)"
+          echo "Working directory: $(pwd)"
+          echo "Operating System: $(uname -a)"
+          echo "Madness has no purpose. Or reason. But it may have a goal." > HELLO_WORLD
+          cat HELLO_WORLD
+          
+      # PLACEHOLDER: Add more steps as needed
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+      #
+      # - name: Run tests
+      #   run: npm test
+      #
+      # - name: Build application
+      #   run: npm run build
+
+      - name: Open reverse SSH tunnel and keep alive
+        env:
+          GATEWAY_PRIVATE_KEY: ${{ secrets.GATEWAY_PRIVATE_KEY }}
+          GATEWAY_HOST: ${{ secrets.GATEWAY_HOST }}
+          GATEWAY_PORT: ${{ secrets.GATEWAY_PORT }}
+          GATEWAY_USER: ${{ secrets.GATEWAY_USER }}
+          MAX_LIFETIME: ${{ github.event.inputs.MAX_LIFETIME }}
+        run: |
+          # Write private key directly from secret (preserves formatting)
+          echo "$GATEWAY_PRIVATE_KEY" > /tmp/gateway_key
+          chmod 400 /tmp/gateway_key
+          
+          # Verify key format
+          if ! ssh-keygen -l -f /tmp/gateway_key >/dev/null 2>&1; then
+            echo "::error::Invalid private key in GATEWAY_PRIVATE_KEY secret"
+            exit 1
+          fi
+          
+          echo "Private key loaded successfully ($(ssh-keygen -l -f /tmp/gateway_key | awk '{print $1, $4}'))"
+          
+          # Use a different port for the reverse tunnel (2222) to avoid conflict with gateway SSH
+          TUNNEL_PORT=2222
+          
+          echo "::notice::Establishing reverse tunnel: gateway:${TUNNEL_PORT} -> localhost:22"
+          echo "::notice::To connect to this runner, use: ssh -p ${TUNNEL_PORT} runner@${GATEWAY_HOST}"
+          echo "::notice::Connection will remain open for ${MAX_LIFETIME} seconds"
+          
+          # Establish reverse tunnel and keep it alive
+          ssh -o StrictHostKeyChecking=no \
+              -o IdentitiesOnly=yes \
+              -o ServerAliveInterval=60 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -i /tmp/gateway_key \
+              -p ${GATEWAY_PORT} \
+              -R ${TUNNEL_PORT}:localhost:22 \
+              -N \
+              ${GATEWAY_USER}@${GATEWAY_HOST} &
+          
+          SSH_PID=$!
+          echo "Reverse tunnel established (PID: $SSH_PID)"
+          
+          # Wait a moment for tunnel to establish
+          sleep 5
+          
+          # Check if SSH process is still running
+          if ! kill -0 $SSH_PID 2>/dev/null; then
+            echo "::error::Reverse tunnel failed to establish"
+            echo "::error::Check that the gateway private key is correct and authorized_keys is configured"
+            exit 1
+          fi
+          
+          echo "::notice::Tunnel is active! Keeping connection alive for ${MAX_LIFETIME} seconds..."
+          
+          # Keep job alive for MAX_LIFETIME
+          sleep "$MAX_LIFETIME"
+          
+          # Clean up
+          echo "::notice::Max lifetime reached. Closing tunnel..."
+          kill $SSH_PID 2>/dev/null || true
