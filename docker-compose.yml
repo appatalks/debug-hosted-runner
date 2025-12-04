@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  gateway:
+    build: .
+    ports:
+      - "50556:50555"
+      - "2222:2222"
+    restart: unless-stopped
