@@ -140,3 +140,7 @@ The SSH server is configured with:
 - `AllowTcpForwarding yes` - Enables TCP forwarding
 - Public key authentication only (no passwords)
 - User: `gateway`
+
+## Screenshot
+
+<img width="1601" height="654" alt="Screenshot 2025-12-04 at 8 29 52 AM" src="https://github.com/user-attachments/assets/6fe4b727-e4c4-4b3f-a414-12313a0e0191" />
